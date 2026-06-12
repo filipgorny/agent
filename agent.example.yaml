@@ -1,0 +1,17 @@
+# Example agent configuration.
+
+initial_prompt: |
+  List the files in the current directory.
+
+# Passed to the llm-provider package to build the LLM instance.
+llm:
+  llm: ollama
+  ollama:
+    url: http://localhost:11434
+    model: qwen2.5-coder:14b
+  claude:
+    model: claude-opus-4-8   # optional
+
+# Skills to enable (must be registered in code).
+skills:
+  - shell_run
