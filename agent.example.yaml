@@ -14,8 +14,14 @@ llm:
   ollama:
     url: http://localhost:11434
     model: qwen2.5-coder:14b
+    options:                 # passed to Ollama; size context to your VRAM
+      num_ctx: 8192
   claude:
     model: claude-opus-4-8   # optional
+
+# Token economy for small-context models: results larger than this are offloaded
+# to a result store and replaced with a preview + id (read more via get_result).
+max_result_chars: 2000
 
 # Plugins to enable (each groups a set of skills and the events they emit).
 plugins:

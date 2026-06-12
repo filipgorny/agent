@@ -154,12 +154,54 @@ func TestPreamble(t *testing.T) {
 	pre := a.protocolPreamble()
 
 	for _, want := range []string{
-		ActionListenFor, ActionWaitFor, ActionRemember, ActionRead, ActionSkill,
-		"files", "reasoning", "file_read (async=false)", "think (async=true)",
-		"think.result", "English",
+		ActionListenFor, ActionWaitFor, ActionRemember, ActionRead, ActionSkill, ActionGetResult,
+		"file_read (async=false)", "think (async=true)", "think.result", "English",
 	} {
 		if !strings.Contains(pre, want) {
 			t.Errorf("preamble missing %q", want)
 		}
+	}
+
+	// Compact mode must not include long descriptions.
+	if strings.Contains(pre, "Reason step-by-step") {
+		t.Error("compact preamble should omit long descriptions")
+	}
+}
+
+func TestResultOffloading(t *testing.T) {
+	a := newAgentWithLlm(t, &scriptedLlm{reply: func(int, string) string { return "" }}, nil, nil, "")
+	a.maxResultChars = 10
+
+	small := "tiny"
+
+	if a.condense(small) != small {
+		t.Error("small result must pass through unchanged")
+	}
+
+	big := strings.Repeat("x", 100)
+	condensed := a.condense(big)
+
+	if !strings.Contains(condensed, "get_result") || !strings.Contains(condensed, "id=") {
+		t.Errorf("condensed should reference get_result + id: %q", condensed)
+	}
+
+	if strings.Contains(condensed, big) {
+		t.Error("full big result must not be inlined")
+	}
+
+	// The full result is retrievable losslessly via get_result.
+	id := a.results.put(big)
+
+	out, err := a.Execute(context.Background(), execContext{}, message.ActionCall{
+		Action: ActionGetResult,
+		Params: map[string]any{"result_id": id, "offset": float64(0), "limit": float64(100)},
+	})
+
+	if err != nil {
+		t.Fatalf("get_result: %v", err)
+	}
+
+	if out != big {
+		t.Errorf("get_result did not return full content (%d chars)", len(out))
 	}
 }

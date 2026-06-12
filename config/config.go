@@ -24,6 +24,16 @@ type Config struct {
 
 	// Memory configures the agent's long-term memory.
 	Memory MemoryConfig `yaml:"memory"`
+
+	// MaxResultChars caps how many chars of a result are inlined into the LLM
+	// context before offloading to the result store (0 = default).
+	MaxResultChars int `yaml:"max_result_chars"`
+
+	// MaxSteps caps reasoning steps per turn (0 = default).
+	MaxSteps int `yaml:"max_steps"`
+
+	// Verbose renders full descriptions in the generated system prompt (larger).
+	Verbose bool `yaml:"verbose"`
 }
 
 // MemoryConfig selects and configures the memory backend.

@@ -18,6 +18,7 @@ const (
 	ActionRead      = "read"
 	ActionListenFor = "listen_for"
 	ActionWaitFor   = "wait_for"
+	ActionGetResult = "get_result"
 )
 
 const defaultWaitTimeout = 120 * time.Second
@@ -39,6 +40,7 @@ func builtinActions() map[string]Action {
 		{ActionRead, `Search memory. params: {"query": string, "top_k": int?}`, runReadAction},
 		{ActionListenFor, `Asynchronously register interest in an event; matching events drive the agent later. params: {"event": string, "thread_id": string?}`, runListenForAction},
 		{ActionWaitFor, `Synchronously block until an event arrives and return its payload. params: {"event": string, "thread_id": string?, "timeout_seconds": int?}`, runWaitForAction},
+		{ActionGetResult, `Read a slice of a stored large result. params: {"result_id": string, "offset": int?, "limit": int?}`, runGetResultAction},
 	}
 
 	out := make(map[string]Action, len(actions))
@@ -216,6 +218,34 @@ func runWaitForAction(ctx context.Context, a *Agent, ec execContext, params map[
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+func runGetResultAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
+	id, ok := core.ParamString(params, "result_id")
+
+	if !ok {
+		return "", fmt.Errorf("action get_result: missing string \"result_id\" parameter")
+	}
+
+	full, ok := a.results.get(id)
+
+	if !ok {
+		return "", fmt.Errorf("action get_result: unknown result_id %q", id)
+	}
+
+	offset, _ := core.ParamInt(params, "offset")
+
+	if offset < 0 || offset > len(full) {
+		return "", nil
+	}
+
+	slice := full[offset:]
+
+	if limit, ok := core.ParamInt(params, "limit"); ok && limit > 0 && limit < len(slice) {
+		slice = slice[:limit]
+	}
+
+	return slice, nil
 }
 
 // eventPayload renders an event's data for feeding back to the LLM.
