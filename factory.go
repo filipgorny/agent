@@ -28,6 +28,16 @@ func NewAgentFromConfig(c config.Config, plugins ...core.Plugin) (*Agent, error)
 
 	a := newAgent(provider, mem, c.Language, c.InitialMessage)
 
+	if c.MaxResultChars > 0 {
+		a.maxResultChars = c.MaxResultChars
+	}
+
+	if c.MaxSteps > 0 {
+		a.maxSteps = c.MaxSteps
+	}
+
+	a.verbose = c.Verbose
+
 	for _, p := range plugins {
 		a.RegisterPlugin(p)
 	}

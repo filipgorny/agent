@@ -17,7 +17,11 @@ import (
 	llm "github.com/filipgorny/llm-provider"
 )
 
-const defaultMaxSteps = 12
+const (
+	defaultMaxSteps       = 12
+	defaultMaxResultChars = 2000
+	maxStepsInContext     = 6 // bounded window of recent steps kept in the prompt
+)
 
 // Agent ties together an LLM, plugins (skills + events), a hard-coded action
 // set, an event bus with listeners, threads and memory.
@@ -30,10 +34,13 @@ type Agent struct {
 	listeners      *listeners
 	memory         memory.Memory
 	threads        *threads
+	results        *resultStore
 	reactions      chan message.InputMessage
 	initialMessage string
 	language       string
 	maxSteps       int
+	maxResultChars int
+	verbose        bool
 
 	mu     sync.Mutex
 	runCtx context.Context
@@ -54,12 +61,53 @@ func newAgent(provider *llm.LlmProvider, mem memory.Memory, language, initialMes
 		listeners:      newListeners(),
 		memory:         mem,
 		threads:        newThreads(),
+		results:        newResultStore(),
 		reactions:      make(chan message.InputMessage, 64),
 		initialMessage: initialMessage,
 		language:       language,
 		maxSteps:       defaultMaxSteps,
+		maxResultChars: defaultMaxResultChars,
 		runCtx:         context.Background(),
 	}
+}
+
+// condense keeps large results OUT of the LLM context but retrievable: results
+// over maxResultChars are stored and replaced with a short preview + an id the
+// LLM can fetch from with the get_result action (context offloading). Small
+// results pass through unchanged — nothing is ever lost.
+func (a *Agent) condense(result string) string {
+	if a.maxResultChars <= 0 || len(result) <= a.maxResultChars {
+		return result
+	}
+
+	id := a.results.put(result)
+
+	return fmt.Sprintf("[large result stored: id=%s, %d bytes — read more with get_result {\"result_id\":%q, \"offset\":N, \"limit\":N}]\npreview:\n%s",
+		id, len(result), id, result[:a.maxResultChars])
+}
+
+// condenseEvent applies result offloading to an event's "result" payload.
+func (a *Agent) condenseEvent(ev core.Event) core.Event {
+	r, ok := ev.Data["result"].(string)
+
+	if !ok || a.maxResultChars <= 0 || len(r) <= a.maxResultChars {
+		return ev
+	}
+
+	id := a.results.put(r)
+
+	data := make(map[string]any, len(ev.Data)+3)
+
+	for k, v := range ev.Data {
+		data[k] = v
+	}
+
+	data["result"] = r[:a.maxResultChars]
+	data["result_id"] = id
+	data["bytes"] = len(r)
+	ev.Data = data
+
+	return ev
 }
 
 // RegisterPlugin makes a plugin's skills and events available to the agent.
@@ -143,7 +191,7 @@ func (a *Agent) forward(ch <-chan core.Event) {
 
 			select {
 
-			case a.reactions <- message.NewEventMessage(ev):
+			case a.reactions <- message.NewEventMessage(a.condenseEvent(ev)):
 
 			case <-a.ctx().Done():
 				return
@@ -205,11 +253,17 @@ func (a *Agent) Listen(ctx context.Context) error {
 	}
 }
 
-// reason runs the decide→execute loop, feeding each action result back, until
-// the LLM responds with no action (its final answer) or maxSteps is reached.
-func (a *Agent) reason(ctx context.Context, threadID string, msg message.InputMessage) (string, error) {
+// reason runs the decide→execute loop until the LLM gives a plain-text answer or
+// maxSteps is reached. The goal is PINNED in every prompt (so the model never
+// loses the task), followed by a bounded window of recent steps (so context
+// stays small for limited-context models).
+func (a *Agent) reason(ctx context.Context, threadID string, goal message.InputMessage) (string, error) {
+	goalJSON, _ := json.Marshal(goal)
+
+	var steps []string
+
 	for step := 0; step < a.maxSteps; step++ {
-		out, err := a.llm.Prompt(ctx, a.buildPrompt(msg))
+		out, err := a.llm.Prompt(ctx, a.reasonPrompt(goalJSON, steps))
 
 		if err != nil {
 			return "", fmt.Errorf("agent: reason: %w", err)
@@ -227,10 +281,34 @@ func (a *Agent) reason(ctx context.Context, threadID string, msg message.InputMe
 			result = "error: " + err.Error()
 		}
 
-		msg = message.NewActionResult(call.Action, result)
+		steps = append(steps, fmt.Sprintf("- %s -> %s", call.Action, a.condense(result)))
+
+		if len(steps) > maxStepsInContext {
+			steps = steps[len(steps)-maxStepsInContext:]
+		}
 	}
 
 	return "", fmt.Errorf("agent: reasoning did not conclude in %d steps", a.maxSteps)
+}
+
+// reasonPrompt renders the preamble, the pinned goal and the recent steps.
+func (a *Agent) reasonPrompt(goalJSON []byte, steps []string) string {
+	var b strings.Builder
+
+	b.WriteString(a.protocolPreamble())
+	b.WriteString("\n\nGoal (keep working with actions until you can answer it; do not ask the user):\n")
+	b.Write(goalJSON)
+
+	if len(steps) > 0 {
+		b.WriteString("\n\nSteps so far (their results are already known — do NOT repeat them):\n")
+		b.WriteString(strings.Join(steps, "\n"))
+	}
+
+	b.WriteString("\n\nReply with the next action JSON to gather missing information, ")
+	b.WriteString("or — as soon as the steps already contain enough to answer the Goal — ")
+	b.WriteString("reply with the final answer as plain text.")
+
+	return b.String()
 }
 
 // Decide asks the LLM for a single action for the given message.
@@ -280,63 +358,64 @@ func (a *Agent) buildPrompt(msg message.InputMessage) string {
 	return a.protocolPreamble() + "\n\nIncoming message:\n" + string(payload)
 }
 
-// protocolPreamble describes the protocol, actions, plugins, skills (with async
-// flag and events) and the language. It is prepended to every LLM message.
+// protocolPreamble is the generated system prompt. It is kept compact (one line
+// per action/skill, event names only) so it fits limited-context models; set
+// verbose for full descriptions when debugging.
 func (a *Agent) protocolPreamble() string {
 	var b strings.Builder
 
-	b.WriteString("You are an autonomous agent communicating over a JSON protocol.\n")
-	b.WriteString("Each incoming message is JSON with a \"msg_type\" field ")
-	b.WriteString("(\"user_input\", \"event\", \"action_result\").\n\n")
+	b.WriteString("You are an agent using a JSON protocol. Incoming messages are JSON ")
+	b.WriteString("with msg_type (user_input|event|action_result).\n")
+	b.WriteString("Reply with ONLY {\"action\":\"<name>\",\"params\":{...}}, or plain text when done.\n")
 
-	b.WriteString("Available actions:\n")
+	b.WriteString("\nActions:\n")
 
 	for _, name := range sortedActionKeys(a.actions) {
-		fmt.Fprintf(&b, "- %s: %s\n", name, a.actions[name].Description)
-	}
-
-	b.WriteString("\nEnabled plugins:\n")
-
-	for _, p := range a.sortedPlugins() {
-		fmt.Fprintf(&b, "- %s: %s\n", p.Name(), p.Description())
-
-		for _, ev := range p.Events() {
-			fmt.Fprintf(&b, "    event %s: %s\n", ev.Name, ev.Description)
+		if a.verbose {
+			fmt.Fprintf(&b, "- %s: %s\n", name, a.actions[name].Description)
+		} else {
+			fmt.Fprintf(&b, "- %s\n", name)
 		}
 	}
 
-	b.WriteString("\nEnabled skills:\n")
+	b.WriteString("\nSkills (run via the skill action; async ones emit a result event to wait_for/listen_for):\n")
 
 	for _, name := range sortedSkillKeys(a.skills) {
 		s := a.skills[name]
 
-		fmt.Fprintf(&b, "- %s (async=%t): %s\n", name, s.IsAsync(), s.Description())
+		fmt.Fprintf(&b, "- %s (async=%t)", name, s.IsAsync())
 
-		for _, ev := range s.GetEvents() {
-			fmt.Fprintf(&b, "    emits %s: %s\n", ev.Name, ev.Description)
+		if events := eventNames(s.GetEvents()); events != "" {
+			fmt.Fprintf(&b, " events:[%s]", events)
 		}
+
+		if a.verbose {
+			fmt.Fprintf(&b, " — %s", s.Description())
+		}
+
+		b.WriteString("\n")
 	}
 
-	b.WriteString("\nRespond with ONLY a JSON object, no prose, of the form:\n")
-	b.WriteString(`{"msg_type": "action", "action": "<action>", "params": { ... }}`)
-	b.WriteString("\nWhen you are done, respond with your final answer as plain text (no JSON).")
-	fmt.Fprintf(&b, "\n\nAlways respond in %s.", a.language)
+	b.WriteString("\nExample of the loop (act, then answer from the results — never repeat an action):\n")
+	b.WriteString("Goal: count .go files in dir \"x\"\n")
+	b.WriteString("you: {\"action\":\"dir_list\",\"params\":{\"path\":\"x\"}}\n")
+	b.WriteString("steps so far: - dir_list -> a.go\\nb.go\n")
+	b.WriteString("you: There are 2 .go files: a.go and b.go.\n")
+
+	fmt.Fprintf(&b, "\nRespond in %s.", a.language)
 
 	return b.String()
 }
 
-func (a *Agent) sortedPlugins() []core.Plugin {
-	out := make([]core.Plugin, 0, len(a.plugins))
+// eventNames joins event spec names with commas.
+func eventNames(specs []core.EventSpec) string {
+	names := make([]string, 0, len(specs))
 
-	for _, p := range a.plugins {
-		out = append(out, p)
+	for _, e := range specs {
+		names = append(names, e.Name)
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name() < out[j].Name()
-	})
-
-	return out
+	return strings.Join(names, ",")
 }
 
 func sortedActionKeys(m map[string]Action) []string {
