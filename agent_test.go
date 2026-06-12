@@ -24,13 +24,16 @@ func (s *scriptedLlm) Prompt(ctx context.Context, prompt string) (string, error)
 func newAgentWithLlm(t *testing.T, strat llm.Llm, skills []string, initial string) *Agent {
 	t.Helper()
 
-	built, err := buildSkills(skills)
+	provider := llm.NewLlmProvider(strat)
+	bus := NewEventBus()
+
+	built, err := buildSkills(skills, Deps{LLM: provider, Bus: bus})
 
 	if err != nil {
 		t.Fatalf("buildSkills: %v", err)
 	}
 
-	return NewAgent(llm.NewLlmProvider(strat), built, initial)
+	return NewAgent(provider, built, bus, NewInMemoryMemory(), initial, "English")
 }
 
 // TestAgentRunsShellSkill is the closing test: the LLM decides to invoke the

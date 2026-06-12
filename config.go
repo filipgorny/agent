@@ -11,11 +11,23 @@ type Config struct {
 	// InitialPrompt is the agent's starting prompt.
 	InitialPrompt string `yaml:"initial_prompt"`
 
+	// Language is the response language; defaults to "English".
+	Language string `yaml:"language"`
+
 	// Llm configures which LLM backend to use (see llm-provider).
 	Llm llm.Config `yaml:"llm"`
 
 	// Skills lists the names of skills to enable.
 	Skills []string `yaml:"skills"`
+
+	// Memory configures the agent's long-term memory.
+	Memory MemoryConfig `yaml:"memory"`
+}
+
+// MemoryConfig selects and configures the memory backend.
+type MemoryConfig struct {
+	Backend string `yaml:"backend"` // "sqlite" (default) | "inmemory"
+	Path    string `yaml:"path"`    // SQLite database file (empty = in-memory)
 }
 
 // ConfigSource produces an agent Config. YAML is the default source.
@@ -32,13 +44,21 @@ func NewAgentFromConfig(c Config) (*Agent, error) {
 		return nil, err
 	}
 
-	skills, err := buildSkills(c.Skills)
+	memory, err := newMemory(c.Memory)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return NewAgent(provider, skills, c.InitialPrompt), nil
+	bus := NewEventBus()
+
+	skills, err := buildSkills(c.Skills, Deps{LLM: provider, Bus: bus})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return NewAgent(provider, skills, bus, memory, c.InitialPrompt, c.Language), nil
 }
 
 // NewAgentFrom loads a Config from any source and builds an agent.

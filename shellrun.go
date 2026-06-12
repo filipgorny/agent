@@ -12,7 +12,7 @@ import (
 const ShellRunSkillName = "shell_run"
 
 func init() {
-	RegisterSkill(ShellRunSkillName, func() Skill {
+	RegisterSkill(ShellRunSkillName, func(Deps) Skill {
 		return ShellRun{}
 	})
 }

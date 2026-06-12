@@ -10,24 +10,34 @@ import (
 	llm "github.com/filipgorny/llm-provider"
 )
 
-// Agent ties together an LLM, a set of configured skills and a hard-coded set
-// of actions. The LLM decides which action to run; actions may, in turn, invoke
-// a skill or prompt the LLM again.
+// Agent ties together an LLM, configured skills, a hard-coded action set, an
+// event bus and a memory. The LLM communicates via a typed JSON message
+// protocol: it receives InputMessages and returns an action (OutputMessage).
 type Agent struct {
 	llm           *llm.LlmProvider
 	skills        map[string]Skill
 	actions       map[string]Action
+	bus           *EventBus
+	memory        Memory
 	initialPrompt string
+	language      string
 }
 
-// NewAgent builds an agent from an LLM provider, the enabled skills and an
-// initial prompt. The action set is hard-coded.
-func NewAgent(provider *llm.LlmProvider, skills map[string]Skill, initialPrompt string) *Agent {
+// NewAgent builds an agent. The action set is hard-coded; skills, bus, memory
+// and language come from configuration.
+func NewAgent(provider *llm.LlmProvider, skills map[string]Skill, bus *EventBus, memory Memory, initialPrompt, language string) *Agent {
+	if language == "" {
+		language = "English"
+	}
+
 	return &Agent{
 		llm:           provider,
 		skills:        skills,
 		actions:       builtinActions(),
+		bus:           bus,
+		memory:        memory,
 		initialPrompt: initialPrompt,
+		language:      language,
 	}
 }
 
@@ -36,15 +46,24 @@ func (a *Agent) InitialPrompt() string {
 	return a.initialPrompt
 }
 
-// Run starts the agent from its initial prompt: it asks the LLM to choose an
-// action and executes it.
-func (a *Agent) Run(ctx context.Context) (string, error) {
-	return a.Handle(ctx, a.initialPrompt)
+// Bus returns the agent's event bus (for publishing/subscribing).
+func (a *Agent) Bus() *EventBus {
+	return a.bus
 }
 
-// Handle asks the LLM which action to take for input, then executes it.
-func (a *Agent) Handle(ctx context.Context, input string) (string, error) {
-	call, err := a.Decide(ctx, input)
+// Run starts the agent from its initial prompt.
+func (a *Agent) Run(ctx context.Context) (string, error) {
+	return a.Handle(ctx, NewUserInput(a.initialPrompt))
+}
+
+// Ask sends free-form user text to the agent.
+func (a *Agent) Ask(ctx context.Context, text string) (string, error) {
+	return a.Handle(ctx, NewUserInput(text))
+}
+
+// Handle decides on an action for the message, then executes it.
+func (a *Agent) Handle(ctx context.Context, msg InputMessage) (string, error) {
+	call, err := a.Decide(ctx, msg)
 
 	if err != nil {
 		return "", err
@@ -53,9 +72,46 @@ func (a *Agent) Handle(ctx context.Context, input string) (string, error) {
 	return a.Execute(ctx, call)
 }
 
-// Decide asks the LLM to pick the next action for the given input.
-func (a *Agent) Decide(ctx context.Context, input string) (ActionCall, error) {
-	out, err := a.llm.Prompt(ctx, a.decisionPrompt(input))
+// Listen consumes events from the bus and reacts to each as an EventMessage,
+// until the context is cancelled. Errors handling individual events are ignored
+// so one bad event does not stop the loop.
+func (a *Agent) Listen(ctx context.Context) error {
+	if a.bus == nil {
+		return fmt.Errorf("agent: no event bus configured")
+	}
+
+	events, unsubscribe := a.bus.Subscribe()
+
+	defer unsubscribe()
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case ev, ok := <-events:
+
+			if !ok {
+				return nil
+			}
+
+			_, _ = a.Handle(ctx, NewEventMessage(ev.Type, ev.Source, ev.Data))
+		}
+	}
+}
+
+// Decide sends an input message to the LLM and parses the action it returns.
+func (a *Agent) Decide(ctx context.Context, msg InputMessage) (ActionCall, error) {
+	payload, err := json.Marshal(msg)
+
+	if err != nil {
+		return ActionCall{}, fmt.Errorf("agent: marshal message: %w", err)
+	}
+
+	prompt := a.protocolPreamble() + "\n\nIncoming message:\n" + string(payload)
+
+	out, err := a.llm.Prompt(ctx, prompt)
 
 	if err != nil {
 		return ActionCall{}, fmt.Errorf("agent: decide: %w", err)
@@ -65,6 +121,10 @@ func (a *Agent) Decide(ctx context.Context, input string) (ActionCall, error) {
 
 	if err := json.Unmarshal([]byte(extractJSON(out)), &call); err != nil {
 		return ActionCall{}, fmt.Errorf("agent: parse action from %q: %w", out, err)
+	}
+
+	if call.Action == "" {
+		return ActionCall{}, fmt.Errorf("agent: llm returned no action: %q", out)
 	}
 
 	return call, nil
@@ -81,11 +141,16 @@ func (a *Agent) Execute(ctx context.Context, call ActionCall) (string, error) {
 	return action.Run(ctx, a, call.Params)
 }
 
-// decisionPrompt renders the prompt that asks the LLM to choose an action.
-func (a *Agent) decisionPrompt(input string) string {
+// protocolPreamble describes the JSON message protocol, available actions and
+// skills, the required response shape and the configured language. It is
+// prepended to every message sent to the LLM.
+func (a *Agent) protocolPreamble() string {
 	var b strings.Builder
 
-	b.WriteString("You are an autonomous agent. Choose the single next action.\n\n")
+	b.WriteString("You are an autonomous agent communicating over a JSON protocol.\n")
+	b.WriteString("Each incoming message is a JSON object with a \"msg_type\" field ")
+	b.WriteString("(e.g. \"user_input\", \"event\").\n\n")
+
 	b.WriteString("Available actions:\n")
 
 	for _, name := range sortedKeys(a.actions) {
@@ -105,9 +170,8 @@ func (a *Agent) decisionPrompt(input string) string {
 	}
 
 	b.WriteString("\nRespond with ONLY a JSON object, no prose, of the form:\n")
-	b.WriteString(`{"action": "<action>", "params": { ... }}`)
-	b.WriteString("\n\nTask:\n")
-	b.WriteString(input)
+	b.WriteString(`{"msg_type": "action", "action": "<action>", "params": { ... }}`)
+	fmt.Fprintf(&b, "\n\nAlways respond in %s.", a.language)
 
 	return b.String()
 }

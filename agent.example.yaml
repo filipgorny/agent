@@ -3,6 +3,9 @@
 initial_prompt: |
   List the files in the current directory.
 
+# Response language (default: English).
+language: English
+
 # Passed to the llm-provider package to build the LLM instance.
 llm:
   llm: ollama
@@ -15,3 +18,18 @@ llm:
 # Skills to enable (must be registered in code).
 skills:
   - shell_run
+  - file_read
+  - file_write
+  - file_edit
+  - grep
+  - dir_list
+  - file_watch
+  - web_get
+  - web_download
+  - summarize_text
+  - translate
+
+# Long-term memory.
+memory:
+  backend: sqlite          # sqlite (default) | inmemory
+  path: ./agent-memory.db  # empty = in-memory SQLite (no file)
