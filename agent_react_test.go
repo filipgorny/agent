@@ -138,7 +138,7 @@ func TestListenForReactsToEvent(t *testing.T) {
 			}
 
 		case <-tick.C:
-			a.emit(core.Event{Type: "file.changed", Source: "file_watch", Data: map[string]any{"path": "/x"}})
+			a.emitEvent(core.Event{Type: "file.changed", Source: "file_watch", Data: map[string]any{"path": "/x"}})
 
 		case <-deadline:
 			t.Fatal("agent did not react to event")

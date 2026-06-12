@@ -8,6 +8,9 @@ initial_message: |
 # Response language (default: English).
 language: English
 
+# Allow the agent to ask the user (ask_user/ask_choice skills). For CLI/TUI use.
+interactive: true
+
 # Passed to the llm-provider package to build the LLM instance.
 llm:
   llm: ollama
@@ -30,6 +33,7 @@ plugins:
   - text
   - reasoning
   - shell
+  - interaction
 
 # Skills to enable (must belong to an enabled plugin).
 skills:
@@ -43,6 +47,8 @@ skills:
   - translate
   - think
   - shell_run
+  - ask_user
+  - ask_choice
 
 # Long-term memory.
 memory:

@@ -36,7 +36,7 @@ func newAgentWithLlm(t *testing.T, strat llm.Llm, plugins []core.Plugin, skills 
 		a.RegisterPlugin(p)
 	}
 
-	built, err := a.buildSkills(nil, skills, core.Deps{LLM: provider, Emit: a.emit})
+	built, err := a.buildSkills(nil, skills, core.Deps{LLM: provider, Emit: a.emitEvent})
 
 	if err != nil {
 		t.Fatalf("buildSkills: %v", err)

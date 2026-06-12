@@ -4,21 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/filipgorny/agent/core"
+	"github.com/filipgorny/agent/stream"
 )
 
 // Action names hard-coded into the agent.
 const (
-	ActionPrompt    = "prompt"
-	ActionSkill     = "skill"
-	ActionRemember  = "remember"
-	ActionRead      = "read"
-	ActionListenFor = "listen_for"
-	ActionWaitFor   = "wait_for"
-	ActionGetResult = "get_result"
+	ActionPrompt     = "prompt"
+	ActionSkill      = "skill"
+	ActionRemember   = "remember"
+	ActionRead       = "read"
+	ActionListenFor  = "listen_for"
+	ActionWaitFor    = "wait_for"
+	ActionGetResult  = "get_result"
+	ActionChangeRoot = "change_root"
 )
 
 const defaultWaitTimeout = 120 * time.Second
@@ -41,6 +44,7 @@ func builtinActions() map[string]Action {
 		{ActionListenFor, `Asynchronously register interest in an event; matching events drive the agent later. params: {"event": string, "thread_id": string?}`, runListenForAction},
 		{ActionWaitFor, `Synchronously block until an event arrives and return its payload. params: {"event": string, "thread_id": string?, "timeout_seconds": int?}`, runWaitForAction},
 		{ActionGetResult, `Read a slice of a stored large result. params: {"result_id": string, "offset": int?, "limit": int?}`, runGetResultAction},
+		{ActionChangeRoot, `Change the working project/repository root. params: {"path": string}`, runChangeRootAction},
 	}
 
 	out := make(map[string]Action, len(actions))
@@ -91,7 +95,7 @@ func runSkillAction(ctx context.Context, a *Agent, ec execContext, params map[st
 				data["result"] = out
 			}
 
-			a.emit(core.Event{
+			a.emitEvent(core.Event{
 				Type:      core.ResultEvent(skill),
 				Source:    name,
 				ActionUID: actionUID,
@@ -109,7 +113,7 @@ func runSkillAction(ctx context.Context, a *Agent, ec execContext, params map[st
 		return "", err
 	}
 
-	a.emit(core.Event{
+	a.emitEvent(core.Event{
 		Type:      core.ResultEvent(skill),
 		Source:    name,
 		ActionUID: ec.actionUID,
@@ -246,6 +250,23 @@ func runGetResultAction(ctx context.Context, a *Agent, ec execContext, params ma
 	}
 
 	return slice, nil
+}
+
+func runChangeRootAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
+	path, ok := core.ParamString(params, "path")
+
+	if !ok {
+		return "", fmt.Errorf("action change_root: missing string \"path\" parameter")
+	}
+
+	if err := os.Chdir(path); err != nil {
+		return "", fmt.Errorf("action change_root: %w", err)
+	}
+
+	a.SetRoot(path)
+	a.emitMsg(stream.TypeChangeRoot, "", path)
+
+	return "root changed to " + path, nil
 }
 
 // eventPayload renders an event's data for feeding back to the LLM.

@@ -34,6 +34,9 @@ type Config struct {
 
 	// Verbose renders full descriptions in the generated system prompt (larger).
 	Verbose bool `yaml:"verbose"`
+
+	// Interactive allows the agent to ask the user (ask_user/ask_choice skills).
+	Interactive bool `yaml:"interactive"`
 }
 
 // MemoryConfig selects and configures the memory backend.

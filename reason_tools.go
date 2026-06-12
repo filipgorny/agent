@@ -9,6 +9,7 @@ import (
 
 	"github.com/filipgorny/agent/message"
 	"github.com/filipgorny/agent/runtime"
+	"github.com/filipgorny/agent/stream"
 	llm "github.com/filipgorny/llm-provider"
 )
 
@@ -16,6 +17,16 @@ import (
 // supports it. If the model turns out not to support tools at runtime, it falls
 // back to the prompt-based reasoning loop.
 func (a *Agent) drive(ctx context.Context, threadID string, goal message.InputMessage) (string, error) {
+	out, err := a.driveLoop(ctx, threadID, goal)
+
+	if err == nil {
+		a.emitMsg(stream.TypeAnswerUser, "", out)
+	}
+
+	return out, err
+}
+
+func (a *Agent) driveLoop(ctx context.Context, threadID string, goal message.InputMessage) (string, error) {
 	if tc, ok := a.llm.Strategy().(llm.ToolCaller); ok {
 		out, err := a.reasonWithTools(ctx, tc, threadID, goal)
 
@@ -57,7 +68,7 @@ func (a *Agent) reasonWithTools(ctx context.Context, tc llm.ToolCaller, threadID
 		for _, call := range resp.Calls {
 			ac := message.ActionCall{Action: call.Name, Params: call.Arguments}
 
-			result, err := a.Execute(ctx, execContext{threadID: threadID, actionUID: runtime.NewUID()}, ac)
+			result, err := a.execute(ctx, execContext{threadID: threadID, actionUID: runtime.NewUID()}, ac)
 
 			if err != nil {
 				result = "error: " + err.Error()

@@ -10,11 +10,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/filipgorny/agent/core"
 	"github.com/filipgorny/agent/memory"
 	"github.com/filipgorny/agent/message"
 	"github.com/filipgorny/agent/runtime"
+	"github.com/filipgorny/agent/stream"
 	llm "github.com/filipgorny/llm-provider"
 )
 
@@ -43,6 +45,12 @@ type Agent struct {
 	maxResultChars int
 	verbose        bool
 
+	// session stream + interactive ask
+	msgs        chan stream.Message
+	interactive bool
+	root        string
+	answers     chan string
+
 	mu     sync.Mutex
 	runCtx context.Context
 }
@@ -68,8 +76,93 @@ func newAgent(provider *llm.LlmProvider, mem memory.Memory, language, initialMes
 		language:       language,
 		maxSteps:       defaultMaxSteps,
 		maxResultChars: defaultMaxResultChars,
+		msgs:           make(chan stream.Message, 256),
+		answers:        make(chan string, 1),
 		runCtx:         context.Background(),
 	}
+}
+
+// Messages returns the agent's outbound message stream (LOG, ANSWER_USER,
+// ASK_USER, CHANGE_ROOT_FOLDER, …). A session/UI consumes it.
+func (a *Agent) Messages() <-chan stream.Message {
+	return a.msgs
+}
+
+// SetInteractive controls whether the agent may ask the user (ask_user/ask_choice).
+func (a *Agent) SetInteractive(v bool) {
+	a.interactive = v
+}
+
+// Root returns the agent's current project/working root.
+func (a *Agent) Root() string {
+	return a.root
+}
+
+// SetRoot sets the agent's working root.
+func (a *Agent) SetRoot(path string) {
+	a.root = path
+}
+
+// emitMsg pushes a message on the outbound stream (non-blocking; dropped if no
+// consumer or buffer full, so the agent never stalls on a missing UI).
+func (a *Agent) emitMsg(msgType, subtype string, payload any) {
+	select {
+
+	case a.msgs <- stream.Message{Type: msgType, Subtype: subtype, Payload: payload, CreatedAt: time.Now()}:
+
+	default:
+	}
+}
+
+// askUser emits an ASK_USER message and blocks until Answer delivers a reply.
+func (a *Agent) askUser(ctx context.Context, req stream.AskRequest) (string, error) {
+	if !a.interactive {
+		return "", fmt.Errorf("agent: cannot ask the user (non-interactive)")
+	}
+
+	subtype := ""
+
+	if len(req.Choices) > 0 {
+		subtype = stream.SubtypeChoice
+	}
+
+	a.emitMsg(stream.TypeAskUser, subtype, map[string]any{"question": req.Question, "choices": req.Choices})
+
+	select {
+
+	case ans := <-a.answers:
+		return ans, nil
+
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// Answer delivers a user reply to a pending ask_user/ask_choice.
+func (a *Agent) Answer(text string) {
+	select {
+
+	case a.answers <- text:
+
+	default:
+	}
+}
+
+// execute emits TOOL_CALL/TOOL_RESULT around an action and returns its result.
+func (a *Agent) execute(ctx context.Context, ec execContext, call message.ActionCall) (string, error) {
+	a.emitMsg(stream.TypeLog, stream.LogToolCall, map[string]any{"action": call.Action, "params": call.Params})
+
+	result, err := a.Execute(ctx, ec, call)
+
+	if err != nil {
+		a.emitMsg(stream.TypeLog, stream.LogError, err.Error())
+
+		return "", err
+	}
+
+	a.emitMsg(stream.TypeLog, stream.LogToolResult, map[string]any{"action": call.Action, "result": a.condense(result)})
+
+	return result, nil
 }
 
 // condense keeps large results OUT of the LLM context but retrievable: results
@@ -171,7 +264,7 @@ func (a *Agent) buildSkills(enabled, skillNames []string, deps core.Deps) (map[s
 }
 
 // emit routes an event to listeners (wait_for/listen_for) and the bus.
-func (a *Agent) emit(ev core.Event) {
+func (a *Agent) emitEvent(ev core.Event) {
 	a.listeners.Emit(ev)
 	a.bus.Publish(ev)
 }
@@ -276,7 +369,7 @@ func (a *Agent) reason(ctx context.Context, threadID string, goal message.InputM
 			return strings.TrimSpace(extractText(out)), nil
 		}
 
-		result, err := a.Execute(ctx, execContext{threadID: threadID, actionUID: runtime.NewUID()}, call)
+		result, err := a.execute(ctx, execContext{threadID: threadID, actionUID: runtime.NewUID()}, call)
 
 		if err != nil {
 			result = "error: " + err.Error()

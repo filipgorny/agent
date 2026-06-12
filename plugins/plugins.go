@@ -4,6 +4,7 @@ package plugins
 import (
 	"github.com/filipgorny/agent/core"
 	"github.com/filipgorny/agent/plugins/files"
+	"github.com/filipgorny/agent/plugins/interaction"
 	"github.com/filipgorny/agent/plugins/reasoning"
 	"github.com/filipgorny/agent/plugins/shell"
 	"github.com/filipgorny/agent/plugins/text"
@@ -19,5 +20,6 @@ func DefaultPlugins() []core.Plugin {
 		text.TextPlugin{},
 		shell.ShellPlugin{},
 		reasoning.ReasoningPlugin{},
+		interaction.InteractionPlugin{},
 	}
 }

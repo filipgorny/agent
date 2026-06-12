@@ -41,12 +41,20 @@ func NewAgentFromConfig(c config.Config, extraPlugins ...core.Plugin) (*Agent, e
 	}
 
 	a.verbose = c.Verbose
+	a.interactive = c.Interactive
+	a.root = detectRoot()
 
 	for _, p := range available {
 		a.RegisterPlugin(p)
 	}
 
-	skills, err := a.buildSkills(c.Plugins, c.Skills, core.Deps{LLM: provider, Emit: a.emit})
+	deps := core.Deps{LLM: provider, Emit: a.emitEvent}
+
+	if a.interactive {
+		deps.Ask = a.askUser
+	}
+
+	skills, err := a.buildSkills(c.Plugins, c.Skills, deps)
 
 	if err != nil {
 		return nil, err
