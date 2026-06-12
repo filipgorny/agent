@@ -1,4 +1,4 @@
-package agent
+package runtime
 
 import (
 	"sync"
@@ -6,17 +6,17 @@ import (
 	"github.com/filipgorny/agent/core"
 )
 
-// listeners routes emitted events to wait_for/listen_for registrations. Events
+// Listeners routes emitted events to wait_for/listen_for registrations. Events
 // emitted before a waiter registers are buffered in pending, so a wait_for that
 // runs after an async skill already finished still receives the result.
-type listeners struct {
+type Listeners struct {
 	mu      sync.Mutex
 	waiters []*waiter
 	pending []core.Event
 }
 
-func newListeners() *listeners {
-	return &listeners{}
+func NewListeners() *Listeners {
+	return &Listeners{}
 }
 
 func eventMatches(event, threadID string, ev core.Event) bool {
@@ -27,10 +27,10 @@ func eventMatches(event, threadID string, ev core.Event) bool {
 	return threadID == "" || threadID == ev.ThreadID
 }
 
-// register adds a waiter. If a buffered pending event already matches, it is
+// Register adds a waiter. If a buffered pending event already matches, it is
 // delivered immediately (and, for one-shot waiters, no waiter is added).
 // Returns the delivery channel and a cancel function.
-func (l *listeners) register(event, threadID string, oneShot bool) (<-chan core.Event, func()) {
+func (l *Listeners) Register(event, threadID string, oneShot bool) (<-chan core.Event, func()) {
 	l.mu.Lock()
 
 	defer l.mu.Unlock()
@@ -74,8 +74,8 @@ func (l *listeners) register(event, threadID string, oneShot bool) (<-chan core.
 	return ch, cancel
 }
 
-// emit delivers ev to matching waiters. If none match, it is buffered.
-func (l *listeners) emit(ev core.Event) {
+// Emit delivers ev to matching waiters. If none match, it is buffered.
+func (l *Listeners) Emit(ev core.Event) {
 	l.mu.Lock()
 
 	defer l.mu.Unlock()

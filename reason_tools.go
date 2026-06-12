@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/filipgorny/agent/message"
+	"github.com/filipgorny/agent/runtime"
 	llm "github.com/filipgorny/llm-provider"
 )
 
@@ -56,7 +57,7 @@ func (a *Agent) reasonWithTools(ctx context.Context, tc llm.ToolCaller, threadID
 		for _, call := range resp.Calls {
 			ac := message.ActionCall{Action: call.Name, Params: call.Arguments}
 
-			result, err := a.Execute(ctx, execContext{threadID: threadID, actionUID: newUID()}, ac)
+			result, err := a.Execute(ctx, execContext{threadID: threadID, actionUID: runtime.NewUID()}, ac)
 
 			if err != nil {
 				result = "error: " + err.Error()

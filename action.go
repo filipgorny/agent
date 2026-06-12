@@ -76,7 +76,7 @@ func runSkillAction(ctx context.Context, a *Agent, ec execContext, params map[st
 	}
 
 	if skill.IsAsync() {
-		threadID := a.threads.spawn(ec.threadID)
+		threadID := a.threads.Spawn(ec.threadID)
 		actionUID := ec.actionUID
 		runCtx := context.WithoutCancel(ctx)
 
@@ -181,7 +181,7 @@ func runListenForAction(ctx context.Context, a *Agent, ec execContext, params ma
 
 	threadID, _ := core.ParamString(params, "thread_id")
 
-	ch, _ := a.listeners.register(event, threadID, false)
+	ch, _ := a.listeners.Register(event, threadID, false)
 
 	go a.forward(ch)
 
@@ -203,7 +203,7 @@ func runWaitForAction(ctx context.Context, a *Agent, ec execContext, params map[
 		timeout = time.Duration(secs) * time.Second
 	}
 
-	ch, cancel := a.listeners.register(event, threadID, true)
+	ch, cancel := a.listeners.Register(event, threadID, true)
 
 	defer cancel()
 
@@ -227,7 +227,7 @@ func runGetResultAction(ctx context.Context, a *Agent, ec execContext, params ma
 		return "", fmt.Errorf("action get_result: missing string \"result_id\" parameter")
 	}
 
-	full, ok := a.results.get(id)
+	full, ok := a.results.Get(id)
 
 	if !ok {
 		return "", fmt.Errorf("action get_result: unknown result_id %q", id)

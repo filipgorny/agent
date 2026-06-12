@@ -190,7 +190,7 @@ func TestResultOffloading(t *testing.T) {
 	}
 
 	// The full result is retrievable losslessly via get_result.
-	id := a.results.put(big)
+	id := a.results.Put(big)
 
 	out, err := a.Execute(context.Background(), execContext{}, message.ActionCall{
 		Action: ActionGetResult,

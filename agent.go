@@ -14,6 +14,7 @@ import (
 	"github.com/filipgorny/agent/core"
 	"github.com/filipgorny/agent/memory"
 	"github.com/filipgorny/agent/message"
+	"github.com/filipgorny/agent/runtime"
 	llm "github.com/filipgorny/llm-provider"
 )
 
@@ -31,10 +32,10 @@ type Agent struct {
 	skills         map[string]core.Skill
 	actions        map[string]Action
 	bus            *core.EventBus
-	listeners      *listeners
+	listeners      *runtime.Listeners
 	memory         memory.Memory
-	threads        *threads
-	results        *resultStore
+	threads        *runtime.Threads
+	results        *runtime.ResultStore
 	reactions      chan message.InputMessage
 	initialMessage string
 	language       string
@@ -58,10 +59,10 @@ func newAgent(provider *llm.LlmProvider, mem memory.Memory, language, initialMes
 		skills:         map[string]core.Skill{},
 		actions:        builtinActions(),
 		bus:            core.NewEventBus(),
-		listeners:      newListeners(),
+		listeners:      runtime.NewListeners(),
 		memory:         mem,
-		threads:        newThreads(),
-		results:        newResultStore(),
+		threads:        runtime.NewThreads(),
+		results:        runtime.NewResultStore(),
 		reactions:      make(chan message.InputMessage, 64),
 		initialMessage: initialMessage,
 		language:       language,
@@ -80,7 +81,7 @@ func (a *Agent) condense(result string) string {
 		return result
 	}
 
-	id := a.results.put(result)
+	id := a.results.Put(result)
 
 	return fmt.Sprintf("[large result stored: id=%s, %d bytes — read more with get_result {\"result_id\":%q, \"offset\":N, \"limit\":N}]\npreview:\n%s",
 		id, len(result), id, result[:a.maxResultChars])
@@ -94,7 +95,7 @@ func (a *Agent) condenseEvent(ev core.Event) core.Event {
 		return ev
 	}
 
-	id := a.results.put(r)
+	id := a.results.Put(r)
 
 	data := make(map[string]any, len(ev.Data)+3)
 
@@ -171,7 +172,7 @@ func (a *Agent) buildSkills(enabled, skillNames []string, deps core.Deps) (map[s
 
 // emit routes an event to listeners (wait_for/listen_for) and the bus.
 func (a *Agent) emit(ev core.Event) {
-	a.listeners.emit(ev)
+	a.listeners.Emit(ev)
 	a.bus.Publish(ev)
 }
 
@@ -220,7 +221,7 @@ func (a *Agent) ctx() context.Context {
 func (a *Agent) Run(ctx context.Context) (string, error) {
 	a.setRunCtx(ctx)
 
-	main := a.threads.ensureMain()
+	main := a.threads.EnsureMain()
 
 	return a.drive(ctx, main, message.NewUserInput(a.initialMessage))
 }
@@ -229,7 +230,7 @@ func (a *Agent) Run(ctx context.Context) (string, error) {
 func (a *Agent) Ask(ctx context.Context, text string) (string, error) {
 	a.setRunCtx(ctx)
 
-	main := a.threads.ensureMain()
+	main := a.threads.EnsureMain()
 
 	return a.drive(ctx, main, message.NewUserInput(text))
 }
@@ -239,7 +240,7 @@ func (a *Agent) Ask(ctx context.Context, text string) (string, error) {
 func (a *Agent) Listen(ctx context.Context) error {
 	a.setRunCtx(ctx)
 
-	main := a.threads.ensureMain()
+	main := a.threads.EnsureMain()
 
 	for {
 		select {
@@ -275,7 +276,7 @@ func (a *Agent) reason(ctx context.Context, threadID string, goal message.InputM
 			return strings.TrimSpace(extractText(out)), nil
 		}
 
-		result, err := a.Execute(ctx, execContext{threadID: threadID, actionUID: newUID()}, call)
+		result, err := a.Execute(ctx, execContext{threadID: threadID, actionUID: runtime.NewUID()}, call)
 
 		if err != nil {
 			result = "error: " + err.Error()

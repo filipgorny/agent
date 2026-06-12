@@ -1,12 +1,14 @@
-package agent
+// Package runtime holds the agent's internal execution primitives: threads,
+// event listeners and the result store.
+package runtime
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 )
 
-// newUID returns a short random hex id (no external dependency).
-func newUID() string {
+// NewUID returns a short random hex id (no external dependency).
+func NewUID() string {
 	var b [8]byte
 
 	if _, err := rand.Read(b[:]); err != nil {

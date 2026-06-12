@@ -1,4 +1,4 @@
-package agent
+package runtime
 
 import "github.com/filipgorny/agent/core"
 
