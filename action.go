@@ -2,53 +2,43 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/filipgorny/agent/core"
 )
 
 // Action names hard-coded into the agent.
 const (
-	ActionPrompt   = "prompt"
-	ActionSkill    = "skill"
-	ActionRemember = "remember"
-	ActionRead     = "read"
+	ActionPrompt    = "prompt"
+	ActionSkill     = "skill"
+	ActionRemember  = "remember"
+	ActionRead      = "read"
+	ActionListenFor = "listen_for"
+	ActionWaitFor   = "wait_for"
 )
 
-// defaultReadTopK is used when the read action omits "top_k".
-const defaultReadTopK = 5
+const defaultWaitTimeout = 120 * time.Second
 
 // Action is a capability the LLM can trigger. Unlike skills, actions are
-// hard-coded into the agent. Each action takes a free-form parameter map so
-// different actions can accept different parameters.
+// hard-coded into the agent. Each takes a free-form parameter map.
 type Action struct {
 	Name        string
 	Description string
-	Run         func(ctx context.Context, a *Agent, params map[string]any) (string, error)
+	Run         func(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error)
 }
 
 // builtinActions returns the hard-coded action set.
 func builtinActions() map[string]Action {
 	actions := []Action{
-		{
-			Name:        ActionPrompt,
-			Description: `Ask the LLM directly. params: {"text": string}`,
-			Run:         runPromptAction,
-		},
-		{
-			Name:        ActionSkill,
-			Description: `Run a configured skill. params: {"name": string, ...skill-specific params}`,
-			Run:         runSkillAction,
-		},
-		{
-			Name:        ActionRemember,
-			Description: `Store a memory. params: {"content": string, "meta": object?}`,
-			Run:         runRememberAction,
-		},
-		{
-			Name:        ActionRead,
-			Description: `Search memory. params: {"query": string, "top_k": int?}`,
-			Run:         runReadAction,
-		},
+		{ActionPrompt, `Ask the LLM directly. params: {"text": string}`, runPromptAction},
+		{ActionSkill, `Run a skill (async skills run in a side thread and emit an event). params: {"name": string, ...skill params}`, runSkillAction},
+		{ActionRemember, `Store a memory. params: {"content": string, "meta": object?}`, runRememberAction},
+		{ActionRead, `Search memory. params: {"query": string, "top_k": int?}`, runReadAction},
+		{ActionListenFor, `Asynchronously register interest in an event; matching events drive the agent later. params: {"event": string, "thread_id": string?}`, runListenForAction},
+		{ActionWaitFor, `Synchronously block until an event arrives and return its payload. params: {"event": string, "thread_id": string?, "timeout_seconds": int?}`, runWaitForAction},
 	}
 
 	out := make(map[string]Action, len(actions))
@@ -60,8 +50,8 @@ func builtinActions() map[string]Action {
 	return out
 }
 
-func runPromptAction(ctx context.Context, a *Agent, params map[string]any) (string, error) {
-	text, ok := params["text"].(string)
+func runPromptAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
+	text, ok := core.ParamString(params, "text")
 
 	if !ok {
 		return "", fmt.Errorf("action prompt: missing string \"text\" parameter")
@@ -70,8 +60,8 @@ func runPromptAction(ctx context.Context, a *Agent, params map[string]any) (stri
 	return a.llm.Prompt(ctx, text)
 }
 
-func runSkillAction(ctx context.Context, a *Agent, params map[string]any) (string, error) {
-	name, ok := params["name"].(string)
+func runSkillAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
+	name, ok := core.ParamString(params, "name")
 
 	if !ok {
 		return "", fmt.Errorf("action skill: missing string \"name\" parameter")
@@ -83,15 +73,57 @@ func runSkillAction(ctx context.Context, a *Agent, params map[string]any) (strin
 		return "", fmt.Errorf("action skill: skill %q is not enabled", name)
 	}
 
-	return skill.Run(ctx, params)
+	if skill.IsAsync() {
+		threadID := a.threads.spawn(ec.threadID)
+		actionUID := ec.actionUID
+		runCtx := context.WithoutCancel(ctx)
+
+		go func() {
+			out, err := skill.Run(runCtx, params)
+
+			data := map[string]any{}
+
+			if err != nil {
+				data["error"] = err.Error()
+			} else {
+				data["result"] = out
+			}
+
+			a.emit(core.Event{
+				Type:      core.ResultEvent(skill),
+				Source:    name,
+				ActionUID: actionUID,
+				ThreadID:  threadID,
+				Data:      data,
+			})
+		}()
+
+		return fmt.Sprintf("spawned %s in thread %s", name, threadID), nil
+	}
+
+	out, err := skill.Run(ctx, params)
+
+	if err != nil {
+		return "", err
+	}
+
+	a.emit(core.Event{
+		Type:      core.ResultEvent(skill),
+		Source:    name,
+		ActionUID: ec.actionUID,
+		ThreadID:  ec.threadID,
+		Data:      map[string]any{"result": out},
+	})
+
+	return out, nil
 }
 
-func runRememberAction(ctx context.Context, a *Agent, params map[string]any) (string, error) {
+func runRememberAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
 	if a.memory == nil {
 		return "", fmt.Errorf("action remember: no memory configured")
 	}
 
-	content, ok := params["content"].(string)
+	content, ok := core.ParamString(params, "content")
 
 	if !ok {
 		return "", fmt.Errorf("action remember: missing string \"content\" parameter")
@@ -106,22 +138,18 @@ func runRememberAction(ctx context.Context, a *Agent, params map[string]any) (st
 	return "remembered", nil
 }
 
-func runReadAction(ctx context.Context, a *Agent, params map[string]any) (string, error) {
+func runReadAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
 	if a.memory == nil {
 		return "", fmt.Errorf("action read: no memory configured")
 	}
 
-	query, ok := params["query"].(string)
+	query, ok := core.ParamString(params, "query")
 
 	if !ok {
 		return "", fmt.Errorf("action read: missing string \"query\" parameter")
 	}
 
-	topK := defaultReadTopK
-
-	if v, ok := params["top_k"].(float64); ok {
-		topK = int(v)
-	}
+	topK, _ := core.ParamInt(params, "top_k")
 
 	records, err := a.memory.Read(ctx, query, topK)
 
@@ -140,4 +168,63 @@ func runReadAction(ctx context.Context, a *Agent, params map[string]any) (string
 	}
 
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+func runListenForAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
+	event, ok := core.ParamString(params, "event")
+
+	if !ok {
+		return "", fmt.Errorf("action listen_for: missing string \"event\" parameter")
+	}
+
+	threadID, _ := core.ParamString(params, "thread_id")
+
+	ch, _ := a.listeners.register(event, threadID, false)
+
+	go a.forward(ch)
+
+	return fmt.Sprintf("listening for %s", event), nil
+}
+
+func runWaitForAction(ctx context.Context, a *Agent, ec execContext, params map[string]any) (string, error) {
+	event, ok := core.ParamString(params, "event")
+
+	if !ok {
+		return "", fmt.Errorf("action wait_for: missing string \"event\" parameter")
+	}
+
+	threadID, _ := core.ParamString(params, "thread_id")
+
+	timeout := defaultWaitTimeout
+
+	if secs, ok := core.ParamInt(params, "timeout_seconds"); ok && secs > 0 {
+		timeout = time.Duration(secs) * time.Second
+	}
+
+	ch, cancel := a.listeners.register(event, threadID, true)
+
+	defer cancel()
+
+	select {
+
+	case ev := <-ch:
+		return eventPayload(ev), nil
+
+	case <-time.After(timeout):
+		return "", fmt.Errorf("action wait_for: timeout waiting for %s", event)
+
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+// eventPayload renders an event's data for feeding back to the LLM.
+func eventPayload(ev core.Event) string {
+	if r, ok := ev.Data["result"].(string); ok {
+		return r
+	}
+
+	b, _ := json.Marshal(ev.Data)
+
+	return string(b)
 }

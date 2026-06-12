@@ -1,7 +1,9 @@
 # Example agent configuration.
 
-initial_prompt: |
-  List the files in the current directory.
+# First message sent to the agent (the system prompt is generated from the
+# enabled plugins/skills, not set here).
+initial_message: |
+  Research the topic and reason about it.
 
 # Response language (default: English).
 language: English
@@ -15,19 +17,26 @@ llm:
   claude:
     model: claude-opus-4-8   # optional
 
-# Skills to enable (must be registered in code).
+# Plugins to enable (each groups a set of skills and the events they emit).
+plugins:
+  - files
+  - web
+  - text
+  - reasoning
+  - shell
+
+# Skills to enable (must belong to an enabled plugin).
 skills:
-  - shell_run
   - file_read
   - file_write
-  - file_edit
   - grep
   - dir_list
   - file_watch
   - web_get
-  - web_download
   - summarize_text
   - translate
+  - think
+  - shell_run
 
 # Long-term memory.
 memory:

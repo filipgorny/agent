@@ -3,48 +3,53 @@ package agent
 import (
 	"testing"
 
+	"github.com/filipgorny/agent/config"
 	llm "github.com/filipgorny/llm-provider"
 )
 
+func ollamaCfg() llm.Config {
+	return llm.Config{Llm: "ollama", Ollama: llm.OllamaConfig{URL: "http://localhost:11434", Model: "llama3"}}
+}
+
 func TestNewAgentFromConfig(t *testing.T) {
-	a, err := NewAgentFromConfig(Config{
-		InitialPrompt: "hello",
-		Llm: llm.Config{
-			Llm:    "ollama",
-			Ollama: llm.OllamaConfig{URL: "http://localhost:11434", Model: "llama3"},
-		},
-		Skills: []string{"shell_run"},
+	a, err := NewAgentFromConfig(config.Config{
+		InitialMessage: "hello",
+		Llm:            ollamaCfg(),
+		Plugins:        []string{"files"},
+		Skills:         []string{"file_read"},
 	})
 
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
-	if a.InitialPrompt() != "hello" {
-		t.Errorf("initial prompt = %q", a.InitialPrompt())
+	if a.InitialMessage() != "hello" {
+		t.Errorf("initial = %q", a.InitialMessage())
 	}
 
-	if _, ok := a.skills["shell_run"]; !ok {
-		t.Error("shell_run skill not enabled")
+	if _, ok := a.skills["file_read"]; !ok {
+		t.Error("file_read not enabled")
 	}
 }
 
-func TestNewAgentFromConfigUnknownSkill(t *testing.T) {
-	_, err := NewAgentFromConfig(Config{
-		Llm: llm.Config{
-			Llm:    "ollama",
-			Ollama: llm.OllamaConfig{URL: "http://localhost:11434", Model: "llama3"},
-		},
-		Skills: []string{"does_not_exist"},
-	})
+func TestUnknownPlugin(t *testing.T) {
+	_, err := NewAgentFromConfig(config.Config{Llm: ollamaCfg(), Plugins: []string{"nope"}, Skills: []string{"x"}})
 
 	if err == nil {
-		t.Fatal("expected error for unknown skill")
+		t.Fatal("expected error for unknown plugin")
 	}
 }
 
-func TestNewAgentFromConfigBadLlm(t *testing.T) {
-	_, err := NewAgentFromConfig(Config{Llm: llm.Config{Llm: "unknown"}})
+func TestSkillNotInEnabledPlugin(t *testing.T) {
+	_, err := NewAgentFromConfig(config.Config{Llm: ollamaCfg(), Plugins: []string{"files"}, Skills: []string{"shell_run"}})
+
+	if err == nil {
+		t.Fatal("expected error: shell_run not in files plugin")
+	}
+}
+
+func TestBadLlm(t *testing.T) {
+	_, err := NewAgentFromConfig(config.Config{Llm: llm.Config{Llm: "unknown"}})
 
 	if err == nil {
 		t.Fatal("expected error for unknown llm")
@@ -53,49 +58,50 @@ func TestNewAgentFromConfigBadLlm(t *testing.T) {
 
 func TestYamlBytesSource(t *testing.T) {
 	yaml := []byte(`
-initial_prompt: do the thing
+initial_message: do the thing
 llm:
   llm: ollama
   ollama:
     url: http://localhost:11434
-    model: qwen2.5-coder:14b
-skills:
-  - shell_run
+    model: llama3
+plugins: [files]
+skills: [file_read]
 `)
 
-	a, err := NewAgentFrom(YamlBytes(yaml))
+	a, err := NewAgentFrom(config.YamlBytes(yaml))
 
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
-	if a.InitialPrompt() != "do the thing" {
-		t.Errorf("initial prompt = %q", a.InitialPrompt())
+	if a.InitialMessage() != "do the thing" {
+		t.Errorf("initial = %q", a.InitialMessage())
 	}
 
-	if _, ok := a.skills["shell_run"]; !ok {
-		t.Error("shell_run skill not enabled")
+	if _, ok := a.skills["file_read"]; !ok {
+		t.Error("file_read not enabled")
 	}
 }
 
 func TestEnvSource(t *testing.T) {
-	t.Setenv("AGENT_INITIAL_PROMPT", "from env")
+	t.Setenv("AGENT_INITIAL_MESSAGE", "from env")
+	t.Setenv("AGENT_PLUGINS", "shell")
 	t.Setenv("AGENT_SKILLS", "shell_run")
 	t.Setenv("AGENT_LLM", "ollama")
 	t.Setenv("AGENT_LLM_OLLAMA_URL", "http://localhost:11434")
 	t.Setenv("AGENT_LLM_OLLAMA_MODEL", "llama3")
 
-	a, err := NewAgentFrom(Env("AGENT"))
+	a, err := NewAgentFrom(config.Env("AGENT"))
 
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
-	if a.InitialPrompt() != "from env" {
-		t.Errorf("initial prompt = %q", a.InitialPrompt())
+	if a.InitialMessage() != "from env" {
+		t.Errorf("initial = %q", a.InitialMessage())
 	}
 
 	if _, ok := a.skills["shell_run"]; !ok {
-		t.Error("shell_run skill not enabled")
+		t.Error("shell_run not enabled")
 	}
 }

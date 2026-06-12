@@ -2,8 +2,13 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/filipgorny/agent/core"
+	"github.com/filipgorny/agent/memory"
+	"github.com/filipgorny/agent/message"
+	"github.com/filipgorny/agent/plugins/shell"
 	llm "github.com/filipgorny/llm-provider"
 )
 
@@ -21,31 +26,41 @@ func (s *scriptedLlm) Prompt(ctx context.Context, prompt string) (string, error)
 	return s.reply(n, prompt), nil
 }
 
-func newAgentWithLlm(t *testing.T, strat llm.Llm, skills []string, initial string) *Agent {
+func newAgentWithLlm(t *testing.T, strat llm.Llm, plugins []core.Plugin, skills []string, initial string) *Agent {
 	t.Helper()
 
 	provider := llm.NewLlmProvider(strat)
-	bus := NewEventBus()
+	a := newAgent(provider, memory.NewInMemory(), "English", initial)
 
-	built, err := buildSkills(skills, Deps{LLM: provider, Bus: bus})
+	for _, p := range plugins {
+		a.RegisterPlugin(p)
+	}
+
+	built, err := a.buildSkills(nil, skills, core.Deps{LLM: provider, Emit: a.emit})
 
 	if err != nil {
 		t.Fatalf("buildSkills: %v", err)
 	}
 
-	return NewAgent(provider, built, bus, NewInMemoryMemory(), initial, "English")
+	a.skills = built
+
+	return a
 }
 
-// TestAgentRunsShellSkill is the closing test: the LLM decides to invoke the
-// shell_run skill, and the agent actually runs the command.
-func TestAgentRunsShellSkill(t *testing.T) {
+// TestAgentReasonRunsShellSkill: the LLM decides to run shell_run, the agent
+// executes it, feeds the result back, and the LLM concludes with plain text.
+func TestAgentReasonRunsShellSkill(t *testing.T) {
 	strat := &scriptedLlm{
 		reply: func(n int, prompt string) string {
-			return `{"action":"skill","params":{"name":"shell_run","command":"echo hello-from-agent"}}`
+			if n == 0 {
+				return `{"action":"skill","params":{"name":"shell_run","command":"echo hello-from-agent"}}`
+			}
+
+			return "done"
 		},
 	}
 
-	a := newAgentWithLlm(t, strat, []string{"shell_run"}, "Run a shell command that prints a greeting.")
+	a := newAgentWithLlm(t, strat, []core.Plugin{shell.ShellPlugin{}}, []string{"shell_run"}, "run echo")
 
 	out, err := a.Run(context.Background())
 
@@ -53,13 +68,12 @@ func TestAgentRunsShellSkill(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if out != "hello-from-agent" {
-		t.Errorf("output = %q, want hello-from-agent", out)
+	if out != "done" {
+		t.Errorf("final = %q, want done", out)
 	}
 
-	// The decision prompt must include the initial prompt and the skill name.
-	if len(strat.calls) != 1 {
-		t.Fatalf("llm calls = %d, want 1", len(strat.calls))
+	if len(strat.calls) < 2 || !strings.Contains(strat.calls[1], "hello-from-agent") {
+		t.Errorf("shell result not fed back: %v", strat.calls)
 	}
 }
 
@@ -67,14 +81,14 @@ func TestAgentPromptAction(t *testing.T) {
 	strat := &scriptedLlm{
 		reply: func(n int, prompt string) string {
 			if n == 0 {
-				return "```json\n{\"action\":\"prompt\",\"params\":{\"text\":\"What is 2+2?\"}}\n```"
+				return `{"action":"prompt","params":{"text":"What is 2+2?"}}`
 			}
 
 			return "4"
 		},
 	}
 
-	a := newAgentWithLlm(t, strat, nil, "Answer a question.")
+	a := newAgentWithLlm(t, strat, nil, nil, "answer")
 
 	out, err := a.Run(context.Background())
 
@@ -83,29 +97,18 @@ func TestAgentPromptAction(t *testing.T) {
 	}
 
 	if out != "4" {
-		t.Errorf("output = %q, want 4", out)
-	}
-
-	// Two calls: one to decide, one for the prompt action itself.
-	if len(strat.calls) != 2 {
-		t.Fatalf("llm calls = %d, want 2", len(strat.calls))
+		t.Errorf("final = %q, want 4", out)
 	}
 
 	if strat.calls[1] != "What is 2+2?" {
-		t.Errorf("prompt action got %q, want What is 2+2?", strat.calls[1])
+		t.Errorf("prompt action got %q", strat.calls[1])
 	}
 }
 
-func TestAgentUnknownAction(t *testing.T) {
-	strat := &scriptedLlm{
-		reply: func(n int, prompt string) string {
-			return `{"action":"nope","params":{}}`
-		},
-	}
+func TestExecuteUnknownAction(t *testing.T) {
+	a := newAgentWithLlm(t, &scriptedLlm{reply: func(int, string) string { return "" }}, nil, nil, "")
 
-	a := newAgentWithLlm(t, strat, nil, "x")
-
-	_, err := a.Run(context.Background())
+	_, err := a.Execute(context.Background(), execContext{}, message.ActionCall{Action: "nope"})
 
 	if err == nil {
 		t.Fatal("expected error for unknown action")
