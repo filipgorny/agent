@@ -20,6 +20,7 @@ import (
 const (
 	defaultMaxSteps       = 12
 	defaultMaxResultChars = 2000
+	maxStepsInContext     = 6 // bounded window of recent steps kept in the prompt
 )
 
 // Agent ties together an LLM, plugins (skills + events), a hard-coded action
@@ -252,11 +253,17 @@ func (a *Agent) Listen(ctx context.Context) error {
 	}
 }
 
-// reason runs the decide→execute loop, feeding each action result back, until
-// the LLM responds with no action (its final answer) or maxSteps is reached.
-func (a *Agent) reason(ctx context.Context, threadID string, msg message.InputMessage) (string, error) {
+// reason runs the decide→execute loop until the LLM gives a plain-text answer or
+// maxSteps is reached. The goal is PINNED in every prompt (so the model never
+// loses the task), followed by a bounded window of recent steps (so context
+// stays small for limited-context models).
+func (a *Agent) reason(ctx context.Context, threadID string, goal message.InputMessage) (string, error) {
+	goalJSON, _ := json.Marshal(goal)
+
+	var steps []string
+
 	for step := 0; step < a.maxSteps; step++ {
-		out, err := a.llm.Prompt(ctx, a.buildPrompt(msg))
+		out, err := a.llm.Prompt(ctx, a.reasonPrompt(goalJSON, steps))
 
 		if err != nil {
 			return "", fmt.Errorf("agent: reason: %w", err)
@@ -274,10 +281,34 @@ func (a *Agent) reason(ctx context.Context, threadID string, msg message.InputMe
 			result = "error: " + err.Error()
 		}
 
-		msg = message.NewActionResult(call.Action, a.condense(result))
+		steps = append(steps, fmt.Sprintf("- %s -> %s", call.Action, a.condense(result)))
+
+		if len(steps) > maxStepsInContext {
+			steps = steps[len(steps)-maxStepsInContext:]
+		}
 	}
 
 	return "", fmt.Errorf("agent: reasoning did not conclude in %d steps", a.maxSteps)
+}
+
+// reasonPrompt renders the preamble, the pinned goal and the recent steps.
+func (a *Agent) reasonPrompt(goalJSON []byte, steps []string) string {
+	var b strings.Builder
+
+	b.WriteString(a.protocolPreamble())
+	b.WriteString("\n\nGoal (keep working with actions until you can answer it; do not ask the user):\n")
+	b.Write(goalJSON)
+
+	if len(steps) > 0 {
+		b.WriteString("\n\nSteps so far (their results are already known — do NOT repeat them):\n")
+		b.WriteString(strings.Join(steps, "\n"))
+	}
+
+	b.WriteString("\n\nReply with the next action JSON to gather missing information, ")
+	b.WriteString("or — as soon as the steps already contain enough to answer the Goal — ")
+	b.WriteString("reply with the final answer as plain text.")
+
+	return b.String()
 }
 
 // Decide asks the LLM for a single action for the given message.
@@ -364,6 +395,12 @@ func (a *Agent) protocolPreamble() string {
 
 		b.WriteString("\n")
 	}
+
+	b.WriteString("\nExample of the loop (act, then answer from the results — never repeat an action):\n")
+	b.WriteString("Goal: count .go files in dir \"x\"\n")
+	b.WriteString("you: {\"action\":\"dir_list\",\"params\":{\"path\":\"x\"}}\n")
+	b.WriteString("steps so far: - dir_list -> a.go\\nb.go\n")
+	b.WriteString("you: There are 2 .go files: a.go and b.go.\n")
 
 	fmt.Fprintf(&b, "\nRespond in %s.", a.language)
 
