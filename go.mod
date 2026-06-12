@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
-	github.com/filipgorny/llm-provider v0.0.1
+	github.com/filipgorny/llm-provider v0.0.2
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/markusmobius/go-trafilatura v1.12.2
 	golang.org/x/net v0.56.0

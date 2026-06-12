@@ -16,8 +16,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/elliotchance/pie/v2 v2.9.0 h1:BkEhh8b/avGCSpXpABSjNuytxlI/S2snkjT3vtVORjw=
 github.com/elliotchance/pie/v2 v2.9.0/go.mod h1:18t0dgGFH006g4eVdDtWfgFZPQEgl10IoEO8YWEq3Og=
-github.com/filipgorny/llm-provider v0.0.1 h1:nkPfMDmj54/jXDg5UbbAQMXUnFwjeqpNEuSL8jDFTHY=
-github.com/filipgorny/llm-provider v0.0.1/go.mod h1:wBdq258EnFK3ZJqUDJUVwmxR0H33nOhlPh8OzIfj10c=
+github.com/filipgorny/llm-provider v0.0.2 h1:+SO3wNgZwYgDGm3rFiGKMwTJgfGDXVvE1ThBfxr0x1Q=
+github.com/filipgorny/llm-provider v0.0.2/go.mod h1:wBdq258EnFK3ZJqUDJUVwmxR0H33nOhlPh8OzIfj10c=
 github.com/forPelevin/gomoji v1.2.0 h1:9k4WVSSkE1ARO/BWywxgEUBvR/jMnao6EZzrql5nxJ8=
 github.com/forPelevin/gomoji v1.2.0/go.mod h1:8+Z3KNGkdslmeGZBC3tCrwMrcPy5GRzAD+gL9NAwMXg=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
