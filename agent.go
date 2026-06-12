@@ -222,7 +222,7 @@ func (a *Agent) Run(ctx context.Context) (string, error) {
 
 	main := a.threads.ensureMain()
 
-	return a.reason(ctx, main, message.NewUserInput(a.initialMessage))
+	return a.drive(ctx, main, message.NewUserInput(a.initialMessage))
 }
 
 // Ask sends free-form user text and reasons until a conclusion.
@@ -231,7 +231,7 @@ func (a *Agent) Ask(ctx context.Context, text string) (string, error) {
 
 	main := a.threads.ensureMain()
 
-	return a.reason(ctx, main, message.NewUserInput(text))
+	return a.drive(ctx, main, message.NewUserInput(text))
 }
 
 // Listen runs the reactive loop: events registered via listen_for drive new
@@ -248,7 +248,7 @@ func (a *Agent) Listen(ctx context.Context) error {
 			return ctx.Err()
 
 		case msg := <-a.reactions:
-			_, _ = a.reason(ctx, main, msg)
+			_, _ = a.drive(ctx, main, msg)
 		}
 	}
 }
