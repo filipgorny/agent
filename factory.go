@@ -3,15 +3,19 @@ package agent
 import (
 	"github.com/filipgorny/agent/config"
 	"github.com/filipgorny/agent/core"
+	"github.com/filipgorny/agent/memory"
+	"github.com/filipgorny/agent/plugins"
 	llm "github.com/filipgorny/llm-provider"
 )
 
 // NewAgentFromConfig builds an agent from config. The given plugins are made
-// available (default: DefaultPlugins()); c.Plugins enables a subset (empty =
-// all) and c.Skills selects skills from the enabled plugins.
-func NewAgentFromConfig(c config.Config, plugins ...core.Plugin) (*Agent, error) {
-	if len(plugins) == 0 {
-		plugins = DefaultPlugins()
+// available (default: plugins.DefaultPlugins()); c.Plugins enables a subset
+// (empty = all) and c.Skills selects skills from the enabled plugins.
+func NewAgentFromConfig(c config.Config, extraPlugins ...core.Plugin) (*Agent, error) {
+	available := extraPlugins
+
+	if len(available) == 0 {
+		available = plugins.DefaultPlugins()
 	}
 
 	provider, err := llm.NewLlmProviderFromConfig(c.Llm)
@@ -20,7 +24,7 @@ func NewAgentFromConfig(c config.Config, plugins ...core.Plugin) (*Agent, error)
 		return nil, err
 	}
 
-	mem, err := newMemory(c.Memory)
+	mem, err := memory.New(c.Memory)
 
 	if err != nil {
 		return nil, err
@@ -38,7 +42,7 @@ func NewAgentFromConfig(c config.Config, plugins ...core.Plugin) (*Agent, error)
 
 	a.verbose = c.Verbose
 
-	for _, p := range plugins {
+	for _, p := range available {
 		a.RegisterPlugin(p)
 	}
 
@@ -55,12 +59,12 @@ func NewAgentFromConfig(c config.Config, plugins ...core.Plugin) (*Agent, error)
 
 // NewAgentFrom loads a Config from any source and builds an agent.
 // For the default YAML source: NewAgentFrom(config.YamlFile(path)).
-func NewAgentFrom(src config.Source, plugins ...core.Plugin) (*Agent, error) {
+func NewAgentFrom(src config.Source, extraPlugins ...core.Plugin) (*Agent, error) {
 	c, err := src.Load()
 
 	if err != nil {
 		return nil, err
 	}
 
-	return NewAgentFromConfig(c, plugins...)
+	return NewAgentFromConfig(c, extraPlugins...)
 }

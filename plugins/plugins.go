@@ -1,4 +1,5 @@
-package agent
+// Package plugins provides the built-in plugin set.
+package plugins
 
 import (
 	"github.com/filipgorny/agent/core"
@@ -10,7 +11,7 @@ import (
 )
 
 // DefaultPlugins returns the built-in plugins. Pass them (or a custom subset) to
-// NewAgentFromConfig, or register them with Agent.RegisterPlugin.
+// agent.NewAgentFromConfig, or register them with Agent.RegisterPlugin.
 func DefaultPlugins() []core.Plugin {
 	return []core.Plugin{
 		files.FilesPlugin{},
