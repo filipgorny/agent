@@ -14,10 +14,10 @@ import (
 )
 
 // drainMessages collects stream messages until stop is closed.
-func drainMessages(a *Agent, stop <-chan struct{}) *[]stream.Message {
+func drainMessages(a *Agent, stop <-chan struct{}) *[]stream.Record {
 	var (
 		mu  sync.Mutex
-		got []stream.Message
+		got []stream.Record
 	)
 
 	out := &got
@@ -29,7 +29,7 @@ func drainMessages(a *Agent, stop <-chan struct{}) *[]stream.Message {
 			case <-stop:
 				return
 
-			case m := <-a.Messages():
+			case m := <-a.Stream():
 				mu.Lock()
 				got = append(got, m)
 				mu.Unlock()
@@ -94,7 +94,7 @@ func TestAskUserBlocksAndAnswers(t *testing.T) {
 	// Expect an ASK_USER message (CHOICE subtype).
 	select {
 
-	case m := <-a.Messages():
+	case m := <-a.Stream():
 
 		if m.Type != stream.TypeAskUser || m.Subtype != stream.SubtypeChoice {
 			t.Fatalf("expected ASK_USER/CHOICE, got %s/%s", m.Type, m.Subtype)

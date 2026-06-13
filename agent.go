@@ -46,7 +46,7 @@ type Agent struct {
 	verbose        bool
 
 	// session stream + interactive ask
-	msgs        chan stream.Message
+	msgs        chan stream.Record
 	interactive bool
 	root        string
 	answers     chan string
@@ -76,15 +76,15 @@ func newAgent(provider *llm.LlmProvider, mem memory.Memory, language, initialMes
 		language:       language,
 		maxSteps:       defaultMaxSteps,
 		maxResultChars: defaultMaxResultChars,
-		msgs:           make(chan stream.Message, 256),
+		msgs:           make(chan stream.Record, 256),
 		answers:        make(chan string, 1),
 		runCtx:         context.Background(),
 	}
 }
 
-// Messages returns the agent's outbound message stream (LOG, ANSWER_USER,
-// ASK_USER, CHANGE_ROOT_FOLDER, …). A session/UI consumes it.
-func (a *Agent) Messages() <-chan stream.Message {
+// Stream returns the agent's outbound record stream (LOG, ANSWER_USER,
+// ASK_USER, CHANGE_ROOT_FOLDER, STATUS, …). A session/UI consumes it.
+func (a *Agent) Stream() <-chan stream.Record {
 	return a.msgs
 }
 
@@ -108,7 +108,7 @@ func (a *Agent) SetRoot(path string) {
 func (a *Agent) emitMsg(msgType, subtype string, payload any) {
 	select {
 
-	case a.msgs <- stream.Message{Type: msgType, Subtype: subtype, Payload: payload, CreatedAt: time.Now()}:
+	case a.msgs <- stream.Record{Type: msgType, Subtype: subtype, Payload: payload, CreatedAt: time.Now()}:
 
 	default:
 	}
@@ -322,10 +322,23 @@ func (a *Agent) Run(ctx context.Context) (string, error) {
 // Ask sends free-form user text and reasons until a conclusion.
 func (a *Agent) Ask(ctx context.Context, text string) (string, error) {
 	a.setRunCtx(ctx)
+	a.emitMsg(stream.TypeStatus, stream.StatusInput, text)
 
 	main := a.threads.EnsureMain()
 
 	return a.drive(ctx, main, message.NewUserInput(text))
+}
+
+// promptLLM wraps a plain-prompt LLM call, bracketing it with STATUS messages so
+// a UI can show that the agent is waiting on the LLM.
+func (a *Agent) promptLLM(ctx context.Context, prompt string) (string, error) {
+	a.emitMsg(stream.TypeStatus, stream.StatusLLMRequest, nil)
+
+	out, err := a.llm.Prompt(ctx, prompt)
+
+	a.emitMsg(stream.TypeStatus, stream.StatusLLMResponse, nil)
+
+	return out, err
 }
 
 // Listen runs the reactive loop: events registered via listen_for drive new
@@ -357,7 +370,7 @@ func (a *Agent) reason(ctx context.Context, threadID string, goal message.InputM
 	var steps []string
 
 	for step := 0; step < a.maxSteps; step++ {
-		out, err := a.llm.Prompt(ctx, a.reasonPrompt(goalJSON, steps))
+		out, err := a.promptLLM(ctx, a.reasonPrompt(goalJSON, steps))
 
 		if err != nil {
 			return "", fmt.Errorf("agent: reason: %w", err)
@@ -407,7 +420,7 @@ func (a *Agent) reasonPrompt(goalJSON []byte, steps []string) string {
 
 // Decide asks the LLM for a single action for the given message.
 func (a *Agent) Decide(ctx context.Context, msg message.InputMessage) (message.ActionCall, error) {
-	out, err := a.llm.Prompt(ctx, a.buildPrompt(msg))
+	out, err := a.promptLLM(ctx, a.buildPrompt(msg))
 
 	if err != nil {
 		return message.ActionCall{}, fmt.Errorf("agent: decide: %w", err)

@@ -53,7 +53,11 @@ func (a *Agent) reasonWithTools(ctx context.Context, tc llm.ToolCaller, threadID
 	}
 
 	for step := 0; step < a.maxSteps; step++ {
+		a.emitMsg(stream.TypeStatus, stream.StatusLLMRequest, nil)
+
 		resp, err := tc.CallTools(ctx, messages, tools)
+
+		a.emitMsg(stream.TypeStatus, stream.StatusLLMResponse, nil)
 
 		if err != nil {
 			return "", fmt.Errorf("agent: tool reason: %w", err)

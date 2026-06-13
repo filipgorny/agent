@@ -6,9 +6,18 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/filipgorny/agent/core"
 )
+
+// browserUserAgent is sent on every fetch: many sites answer the Go default
+// User-Agent with 403/404/429, so we present a common desktop-browser string.
+const browserUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+// fetchClient bounds every request so a hung server can't block the agent when
+// the caller passes a context without a deadline.
+var fetchClient = &http.Client{Timeout: 30 * time.Second}
 
 // WebDownloadSkillName is the registered name of the web_download skill.
 const WebDownloadSkillName = "web_download"
@@ -64,7 +73,11 @@ func fetchURL(ctx context.Context, url string) ([]byte, error) {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	req.Header.Set("User-Agent", browserUserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+	resp, err := fetchClient.Do(req)
 
 	if err != nil {
 		return nil, err
@@ -73,7 +86,7 @@ func fetchURL(ctx context.Context, url string) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("get %s: status %d %s", url, resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
 
 	return io.ReadAll(resp.Body)
